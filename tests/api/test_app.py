@@ -12,6 +12,17 @@ import responses as resp_lib
 from fastapi.testclient import TestClient
 
 from frik.api.app import app
+from frik.sources.h1b import H1BDATA_URL
+
+# Minimal HTML that scrape_h1bdata() can parse — used to mock h1bdata.info in CI
+_MOCK_H1BDATA_HTML = (
+    "<html><body><table>"
+    "<tr><th>Employer</th><th>Job Title</th><th>Base Salary</th>"
+    "<th>Location</th><th>Submit Date</th><th>Start Date</th></tr>"
+    "<tr><td>ACME CORP</td><td>SOFTWARE ENGINEER</td><td>180,000</td>"
+    "<td>SAN JOSE, CA</td><td>01/01/2025</td><td>02/01/2025</td></tr>"
+    "</table></body></html>"
+)
 
 client = TestClient(app, raise_server_exceptions=True)
 
@@ -170,15 +181,18 @@ class TestH1BSearch:
         assert r.status_code == 422
         assert "filter" in r.json()["detail"].lower()
 
+    @resp_lib.activate
     def test_no_db_with_title_falls_back_to_scrape(self, tmp_path, monkeypatch):
         """With a title but no local DB, /h1b/search falls back to h1bdata.info scrape."""
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=_MOCK_H1BDATA_HTML, status=200)
         import frik.sources.h1b as h1b_mod
         monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
         r = client.get("/h1b/search?title=Software+Engineer")
-        # Scrape fallback may return results (real network) or an empty list —
-        # either way the response must be 200, not 404.
         assert r.status_code == 200
-        assert isinstance(r.json(), list)
+        data = r.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
+        assert data[0]["annual_from"] == 180_000
 
     def test_no_db_no_title_returns_404(self, tmp_path, monkeypatch):
         """Without a title the scrape fallback can't run; expect 404."""
@@ -235,13 +249,17 @@ class TestH1BSummary:
         r = client.get("/h1b/summary")
         assert r.status_code == 422
 
+    @resp_lib.activate
     def test_no_db_with_title_falls_back_to_scrape(self, tmp_path, monkeypatch):
         """With a title but no local DB, /h1b/summary falls back to h1bdata.info scrape."""
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=_MOCK_H1BDATA_HTML, status=200)
         import frik.sources.h1b as h1b_mod
         monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
         r = client.get("/h1b/summary?title=Software+Engineer")
         assert r.status_code == 200
-        assert "n" in r.json()
+        data = r.json()
+        assert data["n"] == 1
+        assert data["median"] == 180_000
 
     def test_no_db_no_title_returns_404(self, tmp_path, monkeypatch):
         """Without a title the scrape fallback can't run; expect 404."""
