@@ -131,3 +131,31 @@ pytest --no-cov -x -q
 # Single file
 pytest tests/sources/test_bls.py -v
 ```
+
+---
+
+## Knowledge graph
+
+This repo has a live graphify knowledge graph in `graphify-out/`.
+A `post-commit` hook rebuilds it automatically on every commit (code files
+only — no LLM, fast incremental update via `graphify update`).
+
+**When to consult the graph:**
+- Before touching an unfamiliar module — query it: `graphify query "what does h1b.search do?"`
+- After a refactor — check blast radius: `graphify explain <node-id>`
+- When adding a new source — find connection points: `graphify path <new-source> frik_project`
+
+**Maintenance:**
+```bash
+# Full rebuild (after major restructure)
+graphify update .
+
+# Check hook status
+graphify hook status
+
+# Open visual graph in browser
+open graphify-out/graph.html
+```
+
+`graphify-out/` is in `.gitignore` — the graph is generated, not committed.
+
