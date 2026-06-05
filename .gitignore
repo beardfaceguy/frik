@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+*.env
+# BLS API key — never commit
+bls_api_key*
+.frik_cache/
+*.json.bak
