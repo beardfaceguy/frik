@@ -15,11 +15,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+api = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+]
 dev = [
     "pytest>=8",
     "pytest-cov>=5",
     "responses>=0.25",
+    "httpx2>=0.28",      # FastAPI TestClient transport (starlette >=0.46 prefers httpx2)
     "ruff>=0.4",
+    "fastapi>=0.111",    # needed to import frik.api in tests
+    "uvicorn[standard]>=0.29",
 ]
 
 [project.scripts]

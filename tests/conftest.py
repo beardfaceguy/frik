@@ -89,7 +89,8 @@ def h1b_db(tmp_path: Path) -> Path:
     Create a minimal H1B SQLite database with known rows for testing.
     Returns path to the database file.
     """
-    db = tmp_path / "h1b_test.db"
+    # Name matches the h1b_FY*.db glob so _find_db() locates it via CACHE_DIR monkeypatching
+    db = tmp_path / "h1b_FY9999_Q1.db"
     conn = sqlite3.connect(db)
     conn.execute("""
         CREATE TABLE lca (

@@ -146,6 +146,25 @@ def cmd_h1b_summary(args: argparse.Namespace) -> None:
     print("\nSource: DOL LCA Disclosure Data (H-1B certified filings, offered wage floor)")
 
 
+def cmd_serve(args: argparse.Namespace) -> None:
+    try:
+        import uvicorn
+    except ImportError:
+        print(
+            "Error: uvicorn is not installed.\n"
+            "Install it with:  pip install 'frik[api]'",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    uvicorn.run(
+        "frik.api.app:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level="info",
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="frik",
@@ -200,6 +219,18 @@ def main(argv: list[str] | None = None) -> None:
         p_h1b.print_help()
 
     p_h1b.set_defaults(func=_h1b_help)
+
+    # frik serve
+    p_serve = sub.add_parser(
+        "serve",
+        help="Start the FRIK REST API server",
+        description="Start the FRIK REST API. Visit http://HOST:PORT/docs for the interactive Swagger UI.",
+    )
+    p_serve.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    p_serve.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+    p_serve.add_argument("--reload", action="store_true",
+                         help="Auto-reload on code changes (development only)")
+    p_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args(argv)
     if not args.command:
