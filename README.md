@@ -2,6 +2,8 @@
 
 **Fair Remuneration Intelligence Kit** — multi-source salary intelligence for compensation research and California-compliant pay range generation.
 
+> Named in honor of Henry Clay Frick, the 19th-century industrialist who pioneered the tradition of paying workers exactly as little as the market would tolerate. We are correcting that.
+
 ## What it does
 
 Two use cases:
@@ -12,12 +14,14 @@ Two use cases:
 
 ## Status
 
-| Source | Status |
-|--------|--------|
-| BLS OEWS (national wage percentiles by SOC code) | ✅ Working |
-| H1B/LCA filings (exact salaries by employer + title) | 🔲 Planned |
-| Job postings with disclosed ranges (CA/NY/WA/CO) | 🔲 Planned |
-| CA SB 1162 pay range generator (unified output) | 🔲 Planned |
+| Source | CLI | API |
+|--------|-----|-----|
+| BLS OEWS (national wage percentiles by SOC code) | ✅ `frik wages` | ✅ `GET /wages` |
+| H1B/LCA filings (exact salaries by employer + title) | ✅ `frik h1b` | ✅ `GET /h1b/search`, `GET /h1b/summary` |
+| Job postings with disclosed ranges (CA/NY/WA/CO) | 🔲 Planned | 🔲 Planned |
+| CA SB 1162 pay range generator (unified output) | 🔲 Planned | 🔲 Planned |
+
+**Note on H1B download:** The DOL servers at `foreignlaborcert.doleta.gov` occasionally return 503s. The download command implements retry logic with backoff — if it fails, wait a few minutes and try again. The parsing and caching logic is fully implemented.
 
 ## Installation
 
@@ -25,6 +29,12 @@ Two use cases:
 git clone https://github.com/beardfaceguy/frik
 cd frik
 pip install -e .
+```
+
+To also run the API server:
+
+```bash
+pip install -e ".[api]"
 ```
 
 Optionally set a [free BLS API key](https://data.bls.gov/registrationEngine/) to raise the daily query limit from 25 to 500:
@@ -37,7 +47,7 @@ BLS_API_KEY=your_key_here
 export BLS_API_KEY=your_key_here
 ```
 
-## Usage
+## CLI Usage
 
 ### Wages by SOC code (BLS OEWS)
 
@@ -66,39 +76,110 @@ Source: BLS OEWS (latest annual release) — national, all industries.
 Does not include equity, bonus, or geographic cost-of-living adjustment.
 ```
 
+### H1B/LCA filings (DOL disclosure data)
+
+```bash
+# Download and cache FY2025 Q4 data (~200 MB Excel → local SQLite)
+frik h1b download
+
+# Search by job title
+frik h1b search --title "AI Platform Engineer"
+
+# Filter by title + state + employer
+frik h1b search --title "Software Engineer" --state CA --employer Google
+
+# Wage statistics (p25/median/p75/p90) for a query
+frik h1b summary --title "Software Engineer" --state CA
+
+# Download a different quarter
+frik h1b download --fy 2026 --quarter 2
+```
+
 ### List available SOC codes
 
 ```bash
 frik soc
 ```
 
+### Start the API server
+
+```bash
+# Localhost only (default)
+frik serve
+
+# Accessible on your network
+frik serve --host 0.0.0.0 --port 8000
+
+# With auto-reload for development
+frik serve --reload
+```
+
+## API
+
+Once running, interactive docs are available at:
+- **Swagger UI:** `http://localhost:8000/docs`
+- **ReDoc:** `http://localhost:8000/redoc`
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `GET` | `/soc` | List built-in SOC codes |
+| `GET` | `/wages` | BLS OEWS wages (`?soc=15-1252&soc=15-1299`) |
+| `GET` | `/h1b/search` | Search H1B filings (`?title=...&state=CA&employer=...&limit=50`) |
+| `GET` | `/h1b/summary` | Wage stats for a query (`?title=...&soc=...&state=...`) |
+
+All responses are JSON. The OpenAPI schema is available at `/openapi.json`.
+
+**Note:** `/h1b/*` endpoints require the local cache to be populated first (`frik h1b download`).
+
 ## Data sources
 
-### BLS OEWS (implemented)
+### BLS OEWS
 The Bureau of Labor Statistics [Occupational Employment and Wage Statistics](https://www.bls.gov/oes/) program publishes annual median and mean wages for ~800 occupations at national, state, and metro levels. Free, authoritative, updated annually (~May). Lags market by 12–18 months but is the standard reference cited in salary disputes and legal contexts.
 
-**Caveat for AI/agentic roles:** BLS has no dedicated SOC code for "AI Engineer," "AI Platform Engineer," or similar emerging titles. These roles are currently classified under `15-1299` (Computer Occupations, All Other) or `15-1252` (Software Developers) depending on the employer. The BLS figures for these codes understate actual market comp for AI-specialized roles — supplement with H1B filings and job postings for current market signal.
+**Caveat for AI/agentic roles:** BLS has no dedicated SOC code for "AI Engineer," "AI Platform Engineer," or similar emerging titles. These roles currently land under `15-1299` (Computer Occupations, All Other) or `15-1252` (Software Developers). Supplement with H1B filings for current market signal on AI-specific compensation.
 
-### H1B/LCA filings (planned)
-The DOL [Foreign Labor Certification](https://www.foreignlaborcert.doleta.gov/performancedata.cfm) database contains every H1B application filed — employer name, job title, SOC code, work location, and exact offered wage. Public record, updated quarterly, no API key required. The most accurate source for what named companies actually pay for specific titles.
+### H1B/LCA filings
+The DOL [Foreign Labor Certification](https://www.foreignlaborcert.doleta.gov/performancedata.cfm) database contains every H1B application filed — employer name, job title, SOC code, work location, and exact offered wage. Public record, updated quarterly, no API key required. The most accurate free source for what named companies actually pay for specific titles.
 
-### Job postings (planned)
-California (SB 1162), New York, Washington, and Colorado require employers to disclose salary ranges in job postings. These disclosed ranges are a real-time market signal. Implementation planned via [JobSpy](https://github.com/Bunsly/JobSpy) to scrape LinkedIn, Indeed, Glassdoor, and ZipRecruiter.
+Data is downloaded once, converted to a local SQLite database with full-text search, and cached at `~/.frik_cache/`. Subsequent queries run locally with no network access.
+
+### Job postings *(planned)*
+California (SB 1162), New York, Washington, and Colorado require employers to disclose salary ranges in job postings. These disclosed ranges are a real-time market signal. Implementation planned via [JobSpy](https://github.com/Bunsly/JobSpy).
 
 ## California SB 1162
 
 California law requires employers with 15+ employees to include the expected salary or hourly wage range in all job postings. The range must be the *genuine* range the employer reasonably expects to pay — posting `$1 – $1,000,000` is non-compliant.
 
-`frik range` (planned) will generate a defensible range for a given title and level by triangulating BLS percentiles, H1B filings for comparable roles, and current job postings with disclosed ranges.
+`frik range` *(planned)* will generate a defensible range for a given title and level by triangulating BLS percentiles, H1B filings for comparable roles, and current job postings with disclosed ranges.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Fast TDD loop (no coverage overhead)
+pytest --no-cov -x -q
+
+# Lint
+ruff check . --fix && ruff format .
+```
+
+See `AGENTS.md` for contributor conventions and the TDD workflow expected in this repo.
 
 ## Roadmap
 
-- [ ] H1B/LCA integration (`frik/sources/h1b.py`)
 - [ ] Job postings scraper with salary filter (`frik/sources/postings.py`)
-- [ ] `frik range` command — CA SB 1162 pay range generator
-- [ ] Metro-area adjustment (BLS state/MSA data)
-- [ ] Level mapping (IC1–IC5, M1–M3) to percentile bands
-- [ ] Output formats: Markdown table, CSV, JSON
+- [ ] `frik range` — CA SB 1162 pay range generator
+- [ ] Metro/state-level BLS data (national only today)
+- [ ] Level mapping (IC1–IC5, M1–M3 → percentile bands)
+- [ ] API authentication (before any non-internal deployment)
+- [ ] CORS lockdown to company domain
 
 ## License
 
