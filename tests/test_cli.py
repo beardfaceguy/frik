@@ -104,18 +104,20 @@ class TestH1bCli:
         out = capsys.readouterr().out
         assert "download" in out or "search" in out or "subcommand" in out.lower()
 
-    def test_h1b_search_missing_cache_exits_1(self, tmp_path, monkeypatch):
+    def test_h1b_search_no_db_no_title_exits_1(self, tmp_path, monkeypatch):
+        """No DB and no title → scrape fallback unavailable → exit 1."""
         import frik.sources.h1b as h1b_mod
         monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
 
         with pytest.raises(SystemExit) as exc:
-            main(["h1b", "search", "--title", "Software Engineer"])
+            main(["h1b", "search", "--state", "CA"])
         assert exc.value.code == 1
 
-    def test_h1b_summary_missing_cache_exits_1(self, tmp_path, monkeypatch):
+    def test_h1b_summary_no_db_no_title_exits_1(self, tmp_path, monkeypatch):
+        """No DB and no title → scrape fallback unavailable → exit 1."""
         import frik.sources.h1b as h1b_mod
         monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
 
         with pytest.raises(SystemExit) as exc:
-            main(["h1b", "summary", "--title", "Software Engineer"])
+            main(["h1b", "summary", "--state", "CA"])
         assert exc.value.code == 1

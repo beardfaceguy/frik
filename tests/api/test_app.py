@@ -170,10 +170,21 @@ class TestH1BSearch:
         assert r.status_code == 422
         assert "filter" in r.json()["detail"].lower()
 
-    def test_missing_cache_returns_404(self, tmp_path, monkeypatch):
+    def test_no_db_with_title_falls_back_to_scrape(self, tmp_path, monkeypatch):
+        """With a title but no local DB, /h1b/search falls back to h1bdata.info scrape."""
         import frik.sources.h1b as h1b_mod
         monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
         r = client.get("/h1b/search?title=Software+Engineer")
+        # Scrape fallback may return results (real network) or an empty list —
+        # either way the response must be 200, not 404.
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_no_db_no_title_returns_404(self, tmp_path, monkeypatch):
+        """Without a title the scrape fallback can't run; expect 404."""
+        import frik.sources.h1b as h1b_mod
+        monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
+        r = client.get("/h1b/search?state=CA")
         assert r.status_code == 404
 
     def test_returns_results_from_cache(self, h1b_db, monkeypatch):
@@ -224,10 +235,19 @@ class TestH1BSummary:
         r = client.get("/h1b/summary")
         assert r.status_code == 422
 
-    def test_missing_cache_returns_404(self, tmp_path, monkeypatch):
+    def test_no_db_with_title_falls_back_to_scrape(self, tmp_path, monkeypatch):
+        """With a title but no local DB, /h1b/summary falls back to h1bdata.info scrape."""
         import frik.sources.h1b as h1b_mod
         monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
         r = client.get("/h1b/summary?title=Software+Engineer")
+        assert r.status_code == 200
+        assert "n" in r.json()
+
+    def test_no_db_no_title_returns_404(self, tmp_path, monkeypatch):
+        """Without a title the scrape fallback can't run; expect 404."""
+        import frik.sources.h1b as h1b_mod
+        monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
+        r = client.get("/h1b/summary?state=CA")
         assert r.status_code == 404
 
     def test_returns_stats(self, h1b_db, monkeypatch):

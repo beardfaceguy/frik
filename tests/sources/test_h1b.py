@@ -12,11 +12,15 @@ from pathlib import Path
 
 import pytest
 
+import responses as resp_lib
+
 from frik.sources.h1b import (
     UNIT_TO_ANNUAL,
+    H1BDATA_URL,
     _cache_db_path,
     _find_db,
     _xlsx_to_annual,
+    scrape_h1bdata,
     search,
     summarize,
 )
@@ -239,6 +243,129 @@ class TestSummarize:
 # ---------------------------------------------------------------------------
 # download — error path only (no network)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# scrape_h1bdata — unit tests with mocked HTTP
+# ---------------------------------------------------------------------------
+
+MOCK_H1BDATA_HTML = """
+<html><body>
+<table>
+<tr><th>Employer</th><th>Job Title</th><th>Base Salary</th><th>Location</th><th>Submit Date</th><th>Start Date</th></tr>
+<tr><td>FAIRE WHOLESALE INC</td><td>AI PLATFORM ENGINEER</td><td>210,000</td><td>SAN FRANCISCO, CA</td><td>11/01/2025</td><td>12/01/2025</td></tr>
+<tr><td>BRAINCO TECHNOLOGIES INC</td><td>AI PLATFORM ENGINEER</td><td>187,741</td><td>SAN FRANCISCO, CA</td><td>09/01/2025</td><td>10/01/2025</td></tr>
+<tr><td>ACME CORP</td><td>AI PLATFORM ENGINEER</td><td>bad_salary</td><td>AUSTIN, TX</td><td>06/01/2025</td><td>07/01/2025</td></tr>
+<tr><td>EMPTY ROW</td><td></td><td></td><td></td><td></td><td></td></tr>
+</table>
+</body></html>
+"""
+
+
+class TestScrapeH1bdata:
+    @resp_lib.activate
+    def test_returns_list_of_dicts(self):
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=MOCK_H1BDATA_HTML, status=200)
+        rows = scrape_h1bdata("AI Platform Engineer")
+        assert isinstance(rows, list)
+        assert len(rows) >= 1
+
+    @resp_lib.activate
+    def test_parses_salary_as_int(self):
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=MOCK_H1BDATA_HTML, status=200)
+        rows = scrape_h1bdata("AI Platform Engineer")
+        salaries = [r["annual_from"] for r in rows if r["annual_from"] is not None]
+        assert 210_000 in salaries
+        assert 187_741 in salaries
+
+    @resp_lib.activate
+    def test_result_has_expected_keys(self):
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=MOCK_H1BDATA_HTML, status=200)
+        rows = scrape_h1bdata("AI Platform Engineer")
+        assert len(rows) >= 1
+        expected = {"job_title", "employer", "worksite_city", "worksite_state",
+                    "annual_from", "annual_to", "soc_code", "pw_level", "decision_date"}
+        assert expected.issubset(rows[0].keys())
+
+    @resp_lib.activate
+    def test_malformed_salary_row_skipped(self):
+        """Rows with unparseable salary should be dropped, not crash."""
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=MOCK_H1BDATA_HTML, status=200)
+        rows = scrape_h1bdata("AI Platform Engineer")
+        employers = [r["employer"] for r in rows]
+        assert "ACME CORP" not in employers
+
+    @resp_lib.activate
+    def test_state_filter_applied(self):
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=MOCK_H1BDATA_HTML, status=200)
+        rows = scrape_h1bdata("AI Platform Engineer", state="CA")
+        assert all(r["worksite_state"] == "CA" for r in rows)
+
+    @resp_lib.activate
+    def test_empty_table_returns_empty_list(self):
+        empty_html = "<html><body><table><tr><th>Employer</th></tr></table></body></html>"
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=empty_html, status=200)
+        rows = scrape_h1bdata("Nonexistent Title")
+        assert rows == []
+
+    @resp_lib.activate
+    def test_limit_respected(self):
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=MOCK_H1BDATA_HTML, status=200)
+        rows = scrape_h1bdata("AI Platform Engineer", limit=1)
+        assert len(rows) <= 1
+
+    @resp_lib.activate
+    def test_http_error_raises(self):
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, status=503)
+        with pytest.raises(Exception):
+            scrape_h1bdata("AI Platform Engineer")
+
+    @resp_lib.activate
+    def test_results_sorted_by_salary_desc(self):
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=MOCK_H1BDATA_HTML, status=200)
+        rows = scrape_h1bdata("AI Platform Engineer")
+        salaries = [r["annual_from"] for r in rows if r["annual_from"] is not None]
+        assert salaries == sorted(salaries, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# search() + summarize() — scrape fallback when no DB
+# ---------------------------------------------------------------------------
+
+class TestSearchScrapeFallback:
+    @resp_lib.activate
+    def test_search_falls_back_to_scrape_when_no_db(self, tmp_path, monkeypatch):
+        import frik.sources.h1b as h1b_mod
+        monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=MOCK_H1BDATA_HTML, status=200)
+        rows = search(title="AI Platform Engineer")
+        assert len(rows) >= 1
+        assert all("annual_from" in r for r in rows)
+
+    @resp_lib.activate
+    def test_summarize_falls_back_to_scrape_when_no_db(self, tmp_path, monkeypatch):
+        import frik.sources.h1b as h1b_mod
+        monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
+        resp_lib.add(resp_lib.GET, H1BDATA_URL, body=MOCK_H1BDATA_HTML, status=200)
+        stats = summarize(title="AI Platform Engineer")
+        assert stats["n"] >= 1
+        assert "median" in stats
+
+    def test_search_does_not_scrape_when_db_exists(self, h1b_db, monkeypatch):
+        """When a DB is present, scrape_h1bdata must never be called."""
+        import frik.sources.h1b as h1b_mod
+        called = []
+        monkeypatch.setattr(h1b_mod, "scrape_h1bdata", lambda *a, **kw: called.append(1) or [])
+        search(title="Software Engineer", db_path=h1b_db)
+        assert called == []
+
+    @resp_lib.activate
+    def test_search_fallback_requires_title(self, tmp_path, monkeypatch):
+        """Scrape fallback without a title raises — can't scrape the whole DB."""
+        import frik.sources.h1b as h1b_mod
+        monkeypatch.setattr(h1b_mod, "CACHE_DIR", tmp_path)
+        with pytest.raises(FileNotFoundError):
+            search()  # no title + no DB → can't scrape
+
 
 class TestDownloadErrors:
     def test_raises_for_unknown_fy_quarter(self, tmp_path, monkeypatch):

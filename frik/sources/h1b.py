@@ -12,10 +12,16 @@ Workflow:
     frik h1b download          # download FY2025 Q4 + FY2026 Q2, cache as SQLite
     frik h1b search --title "AI Platform Engineer"
     frik h1b search --title "Software Engineer" --state CA --employer Google
+
+Fallback:
+    When no local SQLite cache exists and a title is provided, search() and
+    summarize() automatically fall back to scraping h1bdata.info (live search,
+    no bulk download required).
 """
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import sys
 import time
@@ -23,6 +29,9 @@ from pathlib import Path
 from typing import Iterator
 
 import requests
+
+# h1bdata.info search endpoint — used as fallback when no local DB is available
+H1BDATA_URL = "https://h1bdata.info/index.php"
 
 CACHE_DIR = Path.home() / ".frik_cache"
 
@@ -325,6 +334,101 @@ def _find_db() -> Path | None:
     return dbs[0] if dbs else None
 
 
+def scrape_h1bdata(
+    title: str,
+    state: str | None = None,
+    year: int = 2025,
+    limit: int = 500,
+) -> list[dict]:
+    """
+    Scrape h1bdata.info for H1B salary records matching a job title.
+
+    Returns records in the same dict shape as search() so callers are agnostic
+    about whether data came from the local SQLite cache or the live scrape.
+
+    Args:
+        title:  Job title to search (required — h1bdata.info is search-only)
+        state:  Two-letter state code to filter results (client-side filter)
+        year:   Fiscal year to query (default: 2025)
+        limit:  Max rows to return after filtering
+
+    Raises:
+        requests.HTTPError: on non-2xx responses
+    """
+    params = {
+        "em": "",
+        "job": title,
+        "city": "",
+        "year": str(year),
+    }
+    headers = {"User-Agent": "frik/0.1 (salary research; github.com/beardfaceguy/frik)"}
+    resp = requests.get(H1BDATA_URL, params=params, headers=headers, timeout=30)
+    resp.raise_for_status()
+
+    # Parse the HTML table — rows are: Employer | Job Title | Salary | City,State | Submit | Start
+    rows: list[dict] = []
+    state_upper = state.upper() if state else None
+
+    # Find all table rows (skip header)
+    row_pattern = re.compile(r"<tr[^>]*>(.*?)</tr>", re.DOTALL | re.IGNORECASE)
+    cell_pattern = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL | re.IGNORECASE)
+    strip_tags = re.compile(r"<[^>]+>")
+
+    for row_match in row_pattern.finditer(resp.text):
+        cells = [
+            strip_tags.sub("", c.group(1)).strip()
+            for c in cell_pattern.finditer(row_match.group(1))
+        ]
+        if len(cells) < 4:
+            continue
+
+        employer = cells[0].upper()
+        job_title = cells[1].upper()
+        salary_raw = cells[2].replace(",", "").strip()
+        location = cells[3]  # "CITY, ST" or "CITY, STATE"
+        decision_date = cells[4] if len(cells) > 4 else ""
+
+        # Parse salary — skip rows with non-numeric wage
+        try:
+            annual_from = int(float(salary_raw))
+        except (ValueError, TypeError):
+            continue
+
+        if annual_from <= 0:
+            continue
+
+        # Parse "CITY, ST" location
+        worksite_city, worksite_state = "", ""
+        if ", " in location:
+            parts = location.rsplit(", ", 1)
+            worksite_city = parts[0].strip()
+            worksite_state = parts[1].strip().upper()[:2]  # take first two chars
+        else:
+            worksite_city = location.strip()
+
+        # Client-side state filter
+        if state_upper and worksite_state != state_upper:
+            continue
+
+        rows.append({
+            "job_title":      job_title,
+            "employer":       employer,
+            "worksite_city":  worksite_city,
+            "worksite_state": worksite_state,
+            "annual_from":    annual_from,
+            "annual_to":      None,  # h1bdata.info only exposes a single salary figure
+            "soc_code":       None,
+            "pw_level":       None,
+            "decision_date":  decision_date,
+        })
+
+        if len(rows) >= limit:
+            break
+
+    rows.sort(key=lambda r: r["annual_from"] or 0, reverse=True)
+    return rows
+
+
 def search(
     title: str | None = None,
     soc_code: str | None = None,
@@ -350,8 +454,16 @@ def search(
     """
     path = db_path or _find_db()
     if path is None or not path.exists():
+        if title:
+            print(
+                "Warning: no local H1B cache found — falling back to h1bdata.info scrape.\n"
+                "Run `frik h1b download` to cache full DOL data locally.",
+                file=sys.stderr,
+            )
+            return scrape_h1bdata(title, state=state, limit=limit)
         raise FileNotFoundError(
-            "No H1B cache found. Run `frik h1b download` first."
+            "No H1B cache found. Run `frik h1b download` first.\n"
+            "Tip: provide --title to enable the h1bdata.info live scrape fallback."
         )
 
     conn = sqlite3.connect(path)
@@ -408,8 +520,37 @@ def summarize(
     """
     path = db_path or _find_db()
     if path is None or not path.exists():
+        if title:
+            print(
+                "Warning: no local H1B cache found — falling back to h1bdata.info scrape.\n"
+                "Run `frik h1b download` to cache full DOL data locally.",
+                file=sys.stderr,
+            )
+            scraped = scrape_h1bdata(title, state=state)
+            wages = [r["annual_from"] for r in scraped if r.get("annual_from") and r["annual_from"] > 10000]
+            if not wages:
+                return {"n": 0}
+            wages.sort()
+            n = len(wages)
+
+            def pct(p: float) -> float:
+                idx = (p / 100) * (n - 1)
+                lo, hi = int(idx), min(int(idx) + 1, n - 1)
+                return wages[lo] + (wages[hi] - wages[lo]) * (idx - lo)
+
+            return {
+                "n":      n,
+                "mean":   round(sum(wages) / n),
+                "median": round(pct(50)),
+                "p25":    round(pct(25)),
+                "p75":    round(pct(75)),
+                "p90":    round(pct(90)),
+                "min":    round(wages[0]),
+                "max":    round(wages[-1]),
+            }
         raise FileNotFoundError(
-            "No H1B cache found. Run `frik h1b download` first."
+            "No H1B cache found. Run `frik h1b download` first.\n"
+            "Tip: provide --title to enable the h1bdata.info live scrape fallback."
         )
 
     conn = sqlite3.connect(path)
