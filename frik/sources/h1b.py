@@ -90,7 +90,7 @@ def _xlsx_to_annual(wage: float | None, unit: str | None) -> float | None:
     return round(wage * mult, 2)
 
 
-def _download_xlsx(url: str, dest: Path, label: str, retries: int = 3) -> None:
+def _download_xlsx(url: str, dest: Path, label: str, retries: int = 3) -> None:  # pragma: no cover
     """Stream-download an Excel file with progress display and retry logic."""
     print(f"Downloading {label}...", flush=True)
     headers = {"User-Agent": "frik/0.1 (salary research tool; github.com/beardfaceguy/frik)"}
@@ -132,7 +132,7 @@ def _download_xlsx(url: str, dest: Path, label: str, retries: int = 3) -> None:
                 raise
 
 
-def _rows_from_xlsx(path: Path) -> Iterator[dict]:
+def _rows_from_xlsx(path: Path) -> Iterator[dict]:  # pragma: no cover
     """Yield rows as dicts from the LCA Excel file, keeping only KEEP_COLUMNS."""
     import openpyxl  # lazy import — only needed for download command
 
@@ -147,7 +147,7 @@ def _rows_from_xlsx(path: Path) -> Iterator[dict]:
     wb.close()
 
 
-def _build_db(xlsx_path: Path, db_path: Path, label: str) -> int:
+def _build_db(xlsx_path: Path, db_path: Path, label: str) -> int:  # pragma: no cover
     """Convert Excel → SQLite, returning number of certified H-1B rows stored."""
     print(f"Parsing {label} → {db_path.name} (this takes a few minutes for large files)...")
 
@@ -371,9 +371,9 @@ def search(
         params: list = [fts_query]
     else:
         sql = """
-            SELECT job_title, employer, worksite_city, worksite_state,
-                   annual_from, annual_to, soc_code, pw_level, decision_date
-            FROM lca WHERE 1=1
+            SELECT l.job_title, l.employer, l.worksite_city, l.worksite_state,
+                   l.annual_from, l.annual_to, l.soc_code, l.pw_level, l.decision_date
+            FROM lca l WHERE 1=1
         """
         params = []
 
@@ -423,7 +423,7 @@ def summarize(
         """
         params: list = [f'"{title}"']
     else:
-        sql = "SELECT annual_from FROM lca WHERE annual_from IS NOT NULL"
+        sql = "SELECT l.annual_from FROM lca l WHERE l.annual_from IS NOT NULL"
         params = []
 
     if soc_code:
